@@ -1,0 +1,245 @@
+// 2nd.cpp : 定义控制台应用程序的入口点。
+//
+
+#include "stdafx.h"
+#include <random>
+#include <cmath>
+#include <list>
+#include <time.h>
+#include <iostream>
+#include <fstream>
+using namespace std;
+
+
+int timeCount=0;
+double T=1;        //时间间隔 
+double duration=10000;
+double reactLength=160;    //反应距离 
+double backSight=10;    //后视距离 
+double avrB=6;
+bool singalRoad=false;
+int serialNumber=0;
+ofstream out("test.csv");
+
+int joint1;
+int joint2;
+int interval1=5;   //各车间隔 
+int interval2=4;
+
+class Car {
+public:
+	double position;
+	double speed;
+	int serialNumber;  //序号 
+	double maxspeed;
+	double B;
+	double willing;
+	double a;
+	Car(int n,double s):serialNumber(n),position(0){
+		srand((unsigned)time(NULL));
+		random_device e;
+		mt19937 gen(e());
+		normal_distribution<double> n1(0.9*s, 0.1*s); //均值, 标准差  
+		while (abs((maxspeed=n1(e))-0.9*s)>0.3*s){};
+		
+		normal_distribution<double> n2(0.9*maxspeed, 0.03*maxspeed); 
+		speed=n2(e);
+		//if(serialNumber==100) speed=15;//人为阻塞节
+
+		normal_distribution<double> n3(avrB, 0.2*avrB); 
+		while (abs((B=n3(e))-avrB)>0.6*avrB);
+
+		normal_distribution<double> n4(0.5, 0.1);
+		while (abs((willing=n4(e)))>0.5);
+	}
+	void run(double ,double);
+	void print(ofstream&);
+};
+
+void Car::run(double x,double v){
+	double acc=0;
+	if (x >= reactLength){
+		if (speed >= maxspeed)
+			acc=0.2*(maxspeed-speed);//还需斟酌
+		if (speed < maxspeed) acc= 3;
+	}
+	else{ //前车距离在反应距离之内
+		if (speed >= maxspeed&&v>0)
+			acc=0.2*(maxspeed-speed);
+		else if (v>0)   //速度低		
+			acc+=0.001*(x-3*speed);
+		//if(x<3*speed) 
+		else{   //速度高
+			acc =-B*pow(v,2)/x;
+			if(x<100)
+			acc+=0.001*(x-3*speed);
+		}
+	}
+	
+	acc = acc<-10 ? -10	: acc;
+	acc = acc>3? 3:acc;
+
+	position+=speed*T+acc*T*T/2;
+	speed+=acc*T;
+	a=acc;
+	if(speed>maxspeed+4) {
+		int y;
+		y=1;
+	}
+}
+void Car::print(ofstream& out){
+	out<<serialNumber<<","<<maxspeed<<","<<B<<","<<willing<<","<<position<<","<<speed<<","<<a<<",";
+}
+
+class System{
+private:
+	void run();
+	void add();
+	bool roadChangeCheck1(list<Car>::iterator& hot,list<Car>::iterator aim);
+	bool roadChangeCheck2(list<Car>::iterator& hot,list<Car>::iterator aim);
+public:
+	list<Car> road1;
+	list<Car> road2;
+	double roadLength;
+	double maxSpeed; 
+	int passingNumber1;
+	int passingNumber2;
+	void Run();
+	System(double l,double s):roadLength(l),maxSpeed(s),passingNumber1(0),passingNumber2(0){};
+};
+
+void System::add(){
+	if(timeCount%interval1==0)
+		road1.push_front(Car(serialNumber++,maxSpeed));
+	if(timeCount%interval2==0)
+		road2.push_front(Car(serialNumber++,maxSpeed));
+}
+void System::run(){
+	add();
+	list<Car>::iterator  ito1=road1.begin();
+	list<Car>::iterator  ito2=road2.begin();
+	while(ito1!=road1.end()||ito2!=road2.end()){
+		if(ito1!=road1.end()&&(ito2==road2.end()||ito1->position<ito2->position)){
+			if(!roadChangeCheck1(ito1,ito2)){
+				list<Car>::iterator i=ito1;
+				i++;
+				double x=i==road1.end()?2*reactLength:i->position-ito1->position;
+				double v=i==road1.end()?2*reactLength:i->speed-ito1->speed;
+				if(i!=road1.end()&&i->position<ito1->position){
+					cout<<"1collision"<<endl;
+					system("pause");
+				}
+				ito1->run(x,v);
+				if(ito1->speed<0.5*maxSpeed)
+					cout<<"1congestion"<<" "<<++joint1<<" "<<ito1->serialNumber<<" "<<timeCount<<endl;
+				else 
+					joint1=0;
+				ito1->print(out);
+				out<<1<<","<<timeCount<<endl;
+				ito1++;
+			}
+		}
+		else if(!roadChangeCheck2(ito2,ito1)){
+			list<Car>::iterator i=ito2;
+			i++;
+			double x=i==road2.end()?2*reactLength:i->position-ito2->position;
+			double v=i==road2.end()?0:i->speed-ito2->speed;
+			if(i!=road2.end()&&i->position<ito2->position){
+				cout<<"2collision"<<endl;
+				system("pause");
+		}
+			ito2->run(x,v);
+			if(ito2->speed<0.5*maxSpeed)
+				cout<<"2congestion"<<" "<<++joint2<<" "<<ito2->serialNumber<<" "<<timeCount<<endl;
+			else 
+				joint2=0;
+			ito2->print(out);
+			out<<2<<","<<timeCount<<endl;
+			ito2++;
+		}
+	}
+}
+void System::Run(){
+	for(;timeCount*T<duration;timeCount++){
+		run();
+		while(road1.back().position>roadLength){
+			road1.pop_back();
+			passingNumber1++;
+		}
+		while(road2.back().position>roadLength){
+			road2.pop_back();
+			passingNumber2++;
+		}
+	}
+}
+bool System::roadChangeCheck1(list<Car>::iterator& hot,list<Car>::iterator aim){
+	if(singalRoad) return false;
+	
+	list<Car>::iterator i=hot;
+	i++;
+	list<Car>::iterator sib=aim;
+	if(aim!=road2.begin()){
+		sib--;
+		if(hot->position<=sib->position||(hot->position-sib->position<backSight&&hot->speed<sib->speed))
+			return false;
+	}
+	if(i==road1.end()||i->position-hot->position>reactLength) return false;
+	double ac=0;
+	if(aim==road2.end()||aim->position-hot->position>reactLength)
+		ac=reactLength;
+	else
+		ac=aim->position-hot->position;
+	if(aim==road2.end()){
+		road2.push_back(*hot);
+		hot=road1.erase(hot);
+		road2.back().run(2*reactLength,0);
+		return true;
+	}
+	else if(aim->speed/i->speed*(ac-i->position-hot->position)/i->position>hot->willing){
+		road2.insert(aim,*hot)->run(aim->position-hot->position,aim->speed-hot->speed); 
+		hot=road1.erase(hot);
+		return true;
+	}
+	else
+		return false;
+}
+bool System::roadChangeCheck2(list<Car>::iterator& hot,list<Car>::iterator aim){
+	if(singalRoad) return false;
+	
+	list<Car>::iterator i=hot;
+	i++;
+	list<Car>::iterator sib=aim;
+	if(aim!=road1.begin()){
+		sib--;
+		if(hot->position<=sib->position||(hot->position-sib->position<backSight&&hot->speed<sib->speed))
+			return false;
+	}
+	if(i==road2.end()||i->position-hot->position>reactLength) return false;
+	double ac=0;
+	if(aim==road1.end()||aim->position-hot->position>reactLength)
+		ac=reactLength;
+	else
+		ac=aim->position-hot->position;
+	if(aim==road1.end()){
+		road1.push_back(*hot);
+		hot=road2.erase(hot);
+		road1.back().run(2*roadLength,0);
+		return true;
+	}
+	else if(aim->speed/i->speed*(ac-i->position-hot->position)/i->position>hot->willing){
+		road1.insert(aim,*hot)->run(aim->position-hot->position,aim->speed-hot->speed);
+		hot=road2.erase(hot);
+		return true;
+	}
+	else
+		return false;
+}
+
+
+int _tmain(int argc, _TCHAR* argv[])
+{
+	System test(5000,30);
+	test.Run();
+	return 0;
+}
+
